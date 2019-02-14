@@ -118,6 +118,167 @@ module ActionView
                        :asynchronous, :method, :insertion, :position,
                        :form, :with, :update, :script, :type ]).merge(CALLBACKS)
 
+
+
+
+      ####### Modified for Porting from Rails 3 to Rails 5 
+      ###     Link_to_remote, form_remote_tag and observe field will work
+
+      # Creates a button with an onclick event which calls a remote action
+      # via XMLHttpRequest
+      # The options for specifying the target with :url
+      # and defining callbacks is the same as link_to_remote.
+      def button_to_remote(name, options = {}, html_options = {})
+        button_to_function(name, remote_function(options), html_options)
+      end
+
+      def submit_to_remote(name, value, options = {})
+        options[:with] ||= 'Form.serialize(this.form)'
+
+        html_options = options.delete(:html) || {}
+        html_options[:name] = name
+
+        button_to_remote(value, options, html_options)
+      end
+
+      def link_to_remote(name, options = {}, html_options = nil)
+        link_to_function(name, remote_function(options), html_options || options.delete(:html))
+      end
+
+      def form_remote_tag(options = {}, &block)
+        options[:form] = true
+
+        options[:html] ||= {}
+        options[:html][:onsubmit] =
+          (options[:html][:onsubmit] ? options[:html][:onsubmit] + "; " : "") +
+          "#{remote_function(options)}; return false;"
+
+        form_tag(options[:html].delete(:action) || url_for(options[:url]), options[:html], &block)
+      end
+
+      # See FormHelper#form_for for additional semantics.
+      def remote_form_for(record_or_name_or_array, *args, &proc)
+        options = args.extract_options!
+
+        case record_or_name_or_array
+        when String, Symbol
+          object_name = record_or_name_or_array
+        when Array
+          object = record_or_name_or_array.last
+          object_name = ActionController::RecordIdentifier.singular_class_name(object)
+          apply_form_for_options!(record_or_name_or_array, options)
+          args.unshift object
+        else
+          object      = record_or_name_or_array
+          object_name = ActionController::RecordIdentifier.singular_class_name(record_or_name_or_array)
+          apply_form_for_options!(object, options)
+          args.unshift object
+        end
+
+        concat(form_remote_tag(options))
+        fields_for(object_name, *(args << options), &proc)
+        concat('</form>'.html_safe)
+      end
+      alias_method :form_remote_for, :remote_form_for
+
+      # Returns '<tt>eval(request.responseText)</tt>' which is the JavaScript function
+      # that +form_remote_tag+ can call in <tt>:complete</tt> to evaluate a multiple
+      # update return document using +update_element_function+ calls.
+      def evaluate_remote_response
+        "eval(request.responseText)"
+      end
+
+      def observe_field(field_id, options = {})
+        if options[:frequency] && options[:frequency] > 0
+          build_observer('Form.Element.Observer', field_id, options)
+        else
+          build_observer('Form.Element.EventObserver', field_id, options)
+        end
+      end
+
+      # Observes the form with the DOM ID specified by +form_id+ and calls a
+      # callback when its contents have changed. The default callback is an
+      # Ajax call. By default all fields of the observed field are sent as
+      # parameters with the Ajax call.
+      #
+      # The +options+ for +observe_form+ are the same as the options for
+      # +observe_field+. The JavaScript variable +value+ available to the
+      # <tt>:with</tt> option is set to the serialized form by default.
+      def observe_form(form_id, options = {})
+        if options[:frequency]
+          build_observer('Form.Observer', form_id, options)
+        else
+          build_observer('Form.EventObserver', form_id, options)
+        end
+      end
+
+      def periodically_call_remote(options = {})
+         frequency = options[:frequency] || 10 # every ten seconds by default
+         code = "new PeriodicalExecuter(function() {#{remote_function(options)}}, #{frequency})"
+         javascript_tag(code)
+      end
+
+
+      def auto_complete_field(field_id, options = {})
+        function =  "var #{field_id}_auto_completer = new Ajax.Autocompleter("
+        function << "'#{field_id}', "
+        function << "'" + (options[:update] || "#{field_id}_auto_complete") + "', "
+        function << "'#{url_for(options[:url])}'"
+        
+        js_options = {}
+        js_options[:tokens] = array_or_string_for_javascript(options[:tokens]) if options[:tokens]
+        js_options[:callback]   = "function(element, value) { return #{options[:with]} }" if options[:with]
+        js_options[:indicator]  = "'#{options[:indicator]}'" if options[:indicator]
+        js_options[:select]     = "'#{options[:select]}'" if options[:select]
+        js_options[:paramName]  = "'#{options[:param_name]}'" if options[:param_name]
+        js_options[:frequency]  = "#{options[:frequency]}" if options[:frequency]
+        js_options[:method]     = "'#{options[:method].to_s}'" if options[:method]
+
+        { :after_update_element => :afterUpdateElement, 
+          :on_show => :onShow, :on_hide => :onHide, :min_chars => :minChars }.each do |k,v|
+          js_options[v] = options[k] if options[k]
+        end
+
+        function << (', ' + options_for_javascript(js_options) + ')')
+
+        javascript_tag(function)
+      end
+      
+      # Use this method in your view to generate a return for the AJAX autocomplete requests.
+      #
+      # Example action:
+      #
+      #   def auto_complete_for_item_title
+      #     @items = Item.find(:all, 
+      #       :conditions => [ 'LOWER(description) LIKE ?', 
+      #       '%' + request.raw_post.downcase + '%' ])
+      #     render :inline => "<%= auto_complete_result(@items, 'description') %>"
+      #   end
+      #
+      # The auto_complete_result can of course also be called from a view belonging to the 
+      # auto_complete action if you need to decorate it further.
+      def auto_complete_result(entries, field, phrase = nil)
+        return unless entries
+        items = entries.map { |entry| content_tag("li", phrase ? highlight(entry[field], phrase) : h(entry[field])) }
+        content_tag("ul", items.uniq)
+      end
+      
+      # Wrapper for text_field with added AJAX autocompletion functionality.
+      #
+      # In your controller, you'll need to define an action called
+      # auto_complete_for to respond the AJAX calls,
+      # 
+      def text_field_with_auto_complete(object, method, tag_options = {}, completion_options = {})
+        (completion_options[:skip_style] ? "" : auto_complete_stylesheet) +
+        text_field(object, method, tag_options) +
+        content_tag("div", "", :id => "#{object}_#{method}_auto_complete", :class => "auto_complete") +
+        auto_complete_field("#{object}_#{method}", { :url => { :action => "auto_complete_for_#{object}_#{method}" } }.update(completion_options))
+      end
+
+
+      ############# Modification for Porting End #############################
+
+
       # Returns the JavaScript needed for a remote function.
       # See the link_to_remote documentation at https://github.com/rails/prototype_legacy_helper as it takes the same arguments.
       #
@@ -157,6 +318,36 @@ module ActionView
 
         return function.html_safe
       end
+
+      private
+        def auto_complete_stylesheet
+          content_tag('style', <<-EOT, :type => 'text/css')
+            div.auto_complete {
+              width: 350px;
+              background: #fff;
+            }
+            div.auto_complete ul {
+              border:1px solid #888;
+              margin:0;
+              padding:0;
+              width:100%;
+              list-style-type:none;
+            }
+            div.auto_complete ul li {
+              margin:0;
+              padding:3px;
+            }
+            div.auto_complete ul li.selected {
+              background-color: #ffb;
+            }
+            div.auto_complete ul strong.highlight {
+              color: #800; 
+              margin:0;
+              padding:0;
+            }
+          EOT
+        end
+
 
       # All the methods were moved to GeneratorMethods so that
       # #include_helpers_from_context has nothing to overwrite.
@@ -867,6 +1058,7 @@ module ActionView
           function_chain[-1].chomp!(';')
           function_chain[-1] += ".#{call}"
         end
+
     end
 
     class JavaScriptElementCollectionProxy < JavaScriptCollectionProxy #:nodoc:\

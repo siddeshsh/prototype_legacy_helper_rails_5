@@ -27,3 +27,15 @@ them at the [issue tracker](https://github.com/rails/prototype-rails/issues),
 or better yet, submit patches by sending a [pull request](https://github.com/rails/prototype-rails/pulls).
 
 In any case, this gem will *NOT* be officially supported on Rails 5.0 and above.
+
+### This helps in migrating old Rails 3 which contains below usage application to Rails 5
+Added support for 
+- button_to_remote
+- submit_to_remote
+- link_to_remote
+- form_remote_tag
+- remote_form_for
+- observe_field
+- observe_form
+- text_field_with_auto_complete
+
